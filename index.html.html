@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat Interface</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root { --bg-color: #000000; --panel-bg: #18181b; --text-main: #ffffff; --text-muted: #a1a1aa; --accent: #27272a; --accent-hover: #3f3f46; --user-msg: linear-gradient(145deg, #2b2b30, #1e1e22); --bot-msg: linear-gradient(145deg, #18181b, #121214); --shadow-3d: 5px 5px 15px rgba(0,0,0,0.6), -5px -5px 15px rgba(255,255,255,0.02); }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', sans-serif; }
+        body { background-color: var(--bg-color); color: var(--text-main); display: flex; height: 100vh; overflow: hidden; }
+        .sidebar { width: 260px; background-color: var(--bg-color); border-right: 1px solid var(--accent); display: flex; flex-direction: column; padding: 1rem; z-index: 10; }
+        .new-chat-btn { background: transparent; color: var(--text-main); border: 1px solid var(--accent-hover); padding: 0.75rem 1rem; border-radius: 8px; display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.9rem; transition: all 0.2s; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); }
+        .new-chat-btn:hover { background: var(--panel-bg); }
+        .nav-menu { margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.2rem; flex: 1; }
+        .nav-item { display: flex; align-items: center; gap: 12px; padding: 0.75rem 1rem; color: var(--text-main); text-decoration: none; border-radius: 8px; font-size: 0.9rem; transition: all 0.2s; }
+        .nav-item:hover { background-color: var(--panel-bg); transform: translateX(3px); }
+        .main-content { flex: 1; display: flex; flex-direction: column; position: relative; background: radial-gradient(circle at 50% 0%, #15151a 0%, #000000 70%); }
+        .bg-orb { position: absolute; top: 20%; left: 50%; transform: translate(-50%, -50%); width: 400px; height: 400px; background: radial-gradient(circle, rgba(255,255,255,0.03) 0%, transparent 70%); border-radius: 50%; pointer-events: none; z-index: 0; }
+        .welcome-screen { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1; transition: opacity 0.5s ease; }
+        .welcome-screen h1 { font-size: 2rem; font-weight: 500; margin-bottom: 2rem; }
+        .chat-container { flex: 1; overflow-y: auto; padding: 2rem 15%; display: none; flex-direction: column; gap: 1.5rem; z-index: 1; scroll-behavior: smooth; }
+        .chat-container::-webkit-scrollbar { width: 6px; } .chat-container::-webkit-scrollbar-thumb { background: var(--accent-hover); border-radius: 10px; }
+        .message { display: flex; gap: 1rem; max-width: 85%; animation: fadeInUp 0.4s ease forwards; }
+        @keyframes fadeInUp { to { opacity: 1; transform: translateY(0); } }
+        .message.user { align-self: flex-end; flex-direction: row-reverse; }
+        .avatar { width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        .bot .avatar { background: #ffffff; color: #000; } .user .avatar { background: var(--accent-hover); }
+        .msg-bubble { padding: 1rem 1.2rem; border-radius: 18px; font-size: 0.95rem; line-height: 1.6; box-shadow: var(--shadow-3d); }
+        .bot .msg-bubble { background: var(--bot-msg); border-top-left-radius: 4px; }
+        .user .msg-bubble { background: var(--user-msg); border-top-right-radius: 4px; }
+        .input-wrapper { padding: 2rem; display: flex; justify-content: center; z-index: 10; background: linear-gradient(to top, #000000 60%, transparent); transition: all 0.5s ease; }
+        .input-wrapper.centered { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -10%); width: 100%; background: transparent; }
+        .input-box { width: 100%; max-width: 750px; background: rgba(39, 39, 42, 0.4); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 30px; display: flex; align-items: center; padding: 0.5rem 1rem; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .icon-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; padding: 10px; border-radius: 50%; }
+        .icon-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.1); }
+        .input-field { flex: 1; background: transparent; border: none; color: var(--text-main); font-size: 1rem; padding: 0.8rem 1rem; outline: none; }
+        .typing-indicator { display: flex; gap: 5px; padding: 5px 0; }
+        .dot { width: 8px; height: 8px; background: var(--text-muted); border-radius: 50%; animation: bounce 1.3s linear infinite; }
+        .dot:nth-child(2) { animation-delay: -1.1s; } .dot:nth-child(3) { animation-delay: -0.9s; }
+        @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.6; } 30% { transform: translateY(-4px); opacity: 1; } }
+        @media (max-width: 768px) { .sidebar { display: none; } .chat-container { padding: 1rem 5%; } .input-box { max-width: 90%; } }
+    </style>
+</head>
+<body>
+    <aside class="sidebar">
+        <button class="new-chat-btn" onclick="resetChat()"><i class="fa-regular fa-pen-to-square"></i> New chat</button>
+        <nav class="nav-menu">
+            <a href="#" class="nav-item"><i class="fa-solid fa-magnifying-glass"></i> Search chats</a>
+            <a href="#" class="nav-item"><i class="fa-regular fa-image"></i> Images</a>
+        </nav>
+    </aside>
+    <main class="main-content">
+        <div class="bg-orb"></div>
+        <div id="welcome-screen" class="welcome-screen">
+            <h1>Where should we begin?</h1>
+        </div>
+        <div id="chat-container" class="chat-container"></div>
+        <div id="input-wrapper" class="input-wrapper centered">
+            <div class="input-box">
+                <button class="icon-btn"><i class="fa-solid fa-plus"></i></button>
+                <input type="text" id="user-input" class="input-field" placeholder="Ask anything" onkeypress="handleEnter(event)">
+                <button class="icon-btn" onclick="sendMessage()"><i class="fa-solid fa-arrow-right"></i></button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const welcomeScreen = document.getElementById('welcome-screen');
+        const chatContainer = document.getElementById('chat-container');
+        const inputWrapper = document.getElementById('input-wrapper');
+        const userInput = document.getElementById('user-input');
+        let isFirstMessage = true;
+
+        function handleEnter(event) { if (event.key === 'Enter') sendMessage(); }
+
+        function resetChat() {
+            chatContainer.innerHTML = '';
+            chatContainer.style.display = 'none';
+            welcomeScreen.style.display = 'flex';
+            inputWrapper.classList.add('centered');
+            isFirstMessage = true;
+            userInput.value = '';
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            if (isFirstMessage) {
+                welcomeScreen.style.display = 'none';
+                inputWrapper.classList.remove('centered');
+                chatContainer.style.display = 'flex';
+                isFirstMessage = false;
+            }
+
+            appendMessage(message, 'user');
+            userInput.value = '';
+            const loadingId = addLoadingIndicator();
+
+            try {
+                // Sending request to Hugging Face Backend
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: message })
+                });
+                const data = await response.json();
+                removeElement(loadingId);
+                appendMessage(data.answer, 'bot');
+            } catch (error) {
+                removeElement(loadingId);
+                appendMessage("❌ Error: Server connection failed.", 'bot');
+            }
+        }
+
+        function appendMessage(text, sender) {
+            const msgDiv = document.createElement('div');
+            msgDiv.classList.add('message', sender);
+            const avatarHTML = sender === 'bot' ? `<div class="avatar"><i class="fa-solid fa-robot"></i></div>` : `<div class="avatar"><i class="fa-solid fa-user"></i></div>`;
+            msgDiv.innerHTML = `${avatarHTML}<div class="msg-bubble">${text.replace(/\\n/g, '<br>')}</div>`;
+            chatContainer.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function addLoadingIndicator() {
+            const id = 'loading-' + Date.now();
+            const msgDiv = document.createElement('div');
+            msgDiv.id = id;
+            msgDiv.classList.add('message', 'bot');
+            msgDiv.innerHTML = `<div class="avatar"><i class="fa-solid fa-robot"></i></div><div class="msg-bubble"><div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
+            chatContainer.appendChild(msgDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return id;
+        }
+
+        function removeElement(id) { const el = document.getElementById(id); if (el) el.remove(); }
+    </script>
+</body>
+</html>

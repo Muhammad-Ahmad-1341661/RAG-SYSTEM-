@@ -1,0 +1,13 @@
+flask
+flask-cors
+transformers
+accelerate
+pypdf2
+google-generativeai
+openai
+torch
+python-docx
+pytesseract
+pillow
+numpy
+pandas
