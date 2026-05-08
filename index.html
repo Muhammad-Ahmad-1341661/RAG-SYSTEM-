@@ -40,7 +40,12 @@
         .dot { width: 8px; height: 8px; background: var(--text-muted); border-radius: 50%; animation: bounce 1.3s linear infinite; }
         .dot:nth-child(2) { animation-delay: -1.1s; } .dot:nth-child(3) { animation-delay: -0.9s; }
         @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.6; } 30% { transform: translateY(-4px); opacity: 1; } }
-        @media (max-width: 768px) { .sidebar { display: none; } .chat-container { padding: 1rem 5%; } .input-box { max-width: 90%; } }
+        
+        /* Toast Notification Styling */
+        #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 8px; padding: 16px; position: fixed; z-index: 100; left: 50%; transform: translateX(-50%); bottom: 30px; font-size: 15px; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); }
+        #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+        @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
     </style>
 </head>
 <body>
@@ -59,12 +64,19 @@
         <div id="chat-container" class="chat-container"></div>
         <div id="input-wrapper" class="input-wrapper centered">
             <div class="input-box">
-                <button class="icon-btn"><i class="fa-solid fa-plus"></i></button>
-                <input type="text" id="user-input" class="input-field" placeholder="Ask anything" onkeypress="handleEnter(event)">
+                <!-- HIDDEN FILE INPUT -->
+                <input type="file" id="file-input" style="display: none;" onchange="handleFileUpload(event)">
+                <!-- PLUS BUTTON TRIGGERS FILE INPUT -->
+                <button class="icon-btn" title="Upload Document" onclick="document.getElementById('file-input').click()"><i class="fa-solid fa-plus"></i></button>
+                
+                <input type="text" id="user-input" class="input-field" placeholder="Ask anything..." onkeypress="handleEnter(event)">
                 <button class="icon-btn" onclick="sendMessage()"><i class="fa-solid fa-arrow-right"></i></button>
             </div>
         </div>
     </main>
+
+    <!-- TOAST NOTIFICATION -->
+    <div id="toast"></div>
 
     <script>
         const welcomeScreen = document.getElementById('welcome-screen');
@@ -73,6 +85,50 @@
         const userInput = document.getElementById('user-input');
         let isFirstMessage = true;
 
+        // Hugging Face proper URL handling
+        const basePath = window.location.pathname.replace(/\/$/, '');
+        const chatUrl = basePath + '/chat';
+        const uploadUrl = basePath + '/upload';
+
+        function showToast(message) {
+            const toast = document.getElementById("toast");
+            toast.innerText = message;
+            toast.className = "show";
+            setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 3000);
+        }
+
+        // ==============================
+        // 1. FILE UPLOAD LOGIC
+        // ==============================
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            showToast(`Uploading ${file.name}... Please wait.`);
+            
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(uploadUrl, { method: 'POST', body: formData });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showToast(data.message); // Success Notification
+                } else {
+                    showToast(`❌ Error: ${data.error}`);
+                }
+            } catch (error) {
+                showToast("❌ File upload failed. Network error.");
+            }
+            
+            // Reset input so same file can be uploaded again if needed
+            event.target.value = '';
+        }
+
+        // ==============================
+        // 2. CHAT LOGIC
+        // ==============================
         function handleEnter(event) { if (event.key === 'Enter') sendMessage(); }
 
         function resetChat() {
@@ -100,18 +156,20 @@
             const loadingId = addLoadingIndicator();
 
             try {
-                // Sending request to Hugging Face Backend
-                const response = await fetch('/chat', {
+                const response = await fetch(chatUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: message })
                 });
+
+                if (!response.ok) throw new Error(`HTTP Status ${response.status}`);
+                
                 const data = await response.json();
                 removeElement(loadingId);
                 appendMessage(data.answer, 'bot');
             } catch (error) {
                 removeElement(loadingId);
-                appendMessage("❌ Error: Server connection failed.", 'bot');
+                appendMessage("❌ Error: Server connection failed. Please try again.", 'bot');
             }
         }
 
@@ -119,7 +177,7 @@
             const msgDiv = document.createElement('div');
             msgDiv.classList.add('message', sender);
             const avatarHTML = sender === 'bot' ? `<div class="avatar"><i class="fa-solid fa-robot"></i></div>` : `<div class="avatar"><i class="fa-solid fa-user"></i></div>`;
-            msgDiv.innerHTML = `${avatarHTML}<div class="msg-bubble">${text.replace(/\\n/g, '<br>')}</div>`;
+            msgDiv.innerHTML = `${avatarHTML}<div class="msg-bubble">${text.replace(/\\n/g, '<br>').replace(/\n/g, '<br>')}</div>`;
             chatContainer.appendChild(msgDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
