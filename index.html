@@ -22,7 +22,7 @@
         .welcome-screen h1 { font-size: 2rem; font-weight: 500; margin-bottom: 2rem; }
         .chat-container { flex: 1; overflow-y: auto; padding: 2rem 15%; display: none; flex-direction: column; gap: 1.5rem; z-index: 1; scroll-behavior: smooth; }
         .chat-container::-webkit-scrollbar { width: 6px; } .chat-container::-webkit-scrollbar-thumb { background: var(--accent-hover); border-radius: 10px; }
-        .message { display: flex; gap: 1rem; max-width: 85%; animation: fadeInUp 0.4s ease forwards; }
+        .message { display: flex; gap: 1rem; max-width: 85%; animation: fadeInUp 0.4s ease forwards; opacity: 0; transform: translateY(10px); }
         @keyframes fadeInUp { to { opacity: 1; transform: translateY(0); } }
         .message.user { align-self: flex-end; flex-direction: row-reverse; }
         .avatar { width: 35px; height: 35px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
@@ -36,17 +36,12 @@
         .icon-btn { background: transparent; border: none; color: var(--text-muted); font-size: 1.2rem; cursor: pointer; padding: 10px; border-radius: 50%; transition: 0.3s; }
         .icon-btn:hover { color: var(--text-main); background: rgba(255,255,255,0.1); }
         .input-field { flex: 1; background: transparent; border: none; color: var(--text-main); font-size: 1rem; padding: 0.8rem 1rem; outline: none; }
-        
-        /* Model Selector Dropdown styling */
         .model-select { background: rgba(0,0,0,0.5); color: #fff; border: 1px solid var(--accent); border-radius: 20px; padding: 8px 12px; margin-right: 10px; outline: none; font-size: 0.85rem; cursor: pointer; }
         .model-select option { background: var(--panel-bg); }
-
         .typing-indicator { display: flex; gap: 5px; padding: 5px 0; }
         .dot { width: 8px; height: 8px; background: var(--text-muted); border-radius: 50%; animation: bounce 1.3s linear infinite; }
         .dot:nth-child(2) { animation-delay: -1.1s; } .dot:nth-child(3) { animation-delay: -0.9s; }
         @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.6; } 30% { transform: translateY(-4px); opacity: 1; } }
-        
-        /* Hidden file input */
         #file-upload { display: none; }
     </style>
 </head>
@@ -68,14 +63,12 @@
         
         <div id="input-wrapper" class="input-wrapper centered">
             <div class="input-box">
-                <!-- Select LLM Model -->
                 <select id="model-choice" class="model-select">
                     <option value="2">🤖 OpenRouter (Default)</option>
                     <option value="1">🌐 Gemini (Multiple)</option>
                     <option value="3">💻 Local GPT-2</option>
                 </select>
 
-                <!-- File Upload Button -->
                 <input type="file" id="file-upload" onchange="uploadFile(event)">
                 <button class="icon-btn" onclick="document.getElementById('file-upload').click()" title="Upload PDF/TXT">
                     <i class="fa-solid fa-plus"></i>
@@ -96,7 +89,7 @@
         let isFirstMessage = true;
 
         function getApiUrl(endpoint) {
-            return window.location.href.split('?')[0].replace(/\/$/, "") + endpoint;
+            return window.location.origin + endpoint;
         }
 
         function handleEnter(event) { if (event.key === 'Enter') sendMessage(); }
@@ -119,82 +112,65 @@
             }
         }
 
-        // ================= File Upload API =================
         async function uploadFile(event) {
             const file = event.target.files[0];
             if (!file) return;
-
             prepareUI();
-            appendMessage(`Uploading file: ${file.name}...`, 'user');
+            appendMessage(`📄 Uploading: ${file.name}...`, 'user');
             const loadingId = addLoadingIndicator();
-
             const formData = new FormData();
             formData.append('file', file);
-
             try {
-                const response = await fetch(getApiUrl('/upload'), {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await response.json();
+                const res = await fetch(getApiUrl('/upload'), { method: 'POST', body: formData });
+                const data = await res.json();
                 removeElement(loadingId);
-                
-                if (data.message) {
-                    appendMessage(data.message, 'bot');
-                } else {
-                    appendMessage("❌ Error: " + data.error, 'bot');
-                }
-            } catch (error) {
+                appendMessage(data.message || data.error || "Upload done.", 'bot');
+            } catch(e) {
                 removeElement(loadingId);
-                appendMessage("❌ Error connecting to server for upload.", 'bot');
+                appendMessage("❌ Upload failed: server error.", 'bot');
             }
-            // Reset input
             event.target.value = '';
         }
 
-        // ================= Chat Message API =================
         async function sendMessage() {
             const message = userInput.value.trim();
             if (!message) return;
-
             prepareUI();
             appendMessage(message, 'user');
             userInput.value = '';
-            
             const loadingId = addLoadingIndicator();
-            const selectedModel = modelChoice.value; // Get 1, 2, or 3
-
+            const selectedModel = modelChoice.value;
             try {
-                const response = await fetch(getApiUrl('/chat'), {
+                const res = await fetch(getApiUrl('/chat'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ query: message, model_choice: selectedModel })
                 });
-                const data = await response.json();
+                const data = await res.json();
                 removeElement(loadingId);
                 appendMessage(data.answer, 'bot');
-            } catch (error) {
+            } catch(e) {
                 removeElement(loadingId);
-                appendMessage(`❌ Error: Server connection failed.`, 'bot');
+                appendMessage("❌ Could not connect to backend.", 'bot');
             }
         }
 
         function appendMessage(text, sender) {
-            const msgDiv = document.createElement('div');
-            msgDiv.classList.add('message', sender);
-            const avatarHTML = sender === 'bot' ? `<div class="avatar"><i class="fa-solid fa-robot"></i></div>` : `<div class="avatar"><i class="fa-solid fa-user"></i></div>`;
-            msgDiv.innerHTML = `${avatarHTML}<div class="msg-bubble">${text.replace(/\\n|\n/g, '<br>')}</div>`;
-            chatContainer.appendChild(msgDiv);
+            const div = document.createElement('div');
+            div.classList.add('message', sender);
+            const avatar = sender === 'bot' ? '<div class="avatar"><i class="fa-solid fa-robot"></i></div>' : '<div class="avatar"><i class="fa-solid fa-user"></i></div>';
+            div.innerHTML = `${avatar}<div class="msg-bubble">${text.replace(/\\n|\n/g, '<br>')}</div>`;
+            chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
         function addLoadingIndicator() {
-            const id = 'loading-' + Date.now();
-            const msgDiv = document.createElement('div');
-            msgDiv.id = id;
-            msgDiv.classList.add('message', 'bot');
-            msgDiv.innerHTML = `<div class="avatar"><i class="fa-solid fa-robot"></i></div><div class="msg-bubble"><div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
-            chatContainer.appendChild(msgDiv);
+            const id = 'ld-' + Date.now();
+            const div = document.createElement('div');
+            div.id = id;
+            div.classList.add('message', 'bot');
+            div.innerHTML = `<div class="avatar"><i class="fa-solid fa-robot"></i></div><div class="msg-bubble"><div class="typing-indicator"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div></div>`;
+            chatContainer.appendChild(div);
             chatContainer.scrollTop = chatContainer.scrollHeight;
             return id;
         }
