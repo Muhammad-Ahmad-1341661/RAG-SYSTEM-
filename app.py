@@ -12,15 +12,7 @@ from werkzeug.utils import secure_filename
 
 warnings.filterwarnings('ignore')
 
-# ========================= OPTIONAL OCR (will not crash if missing) =========================
-try:
-    import pytesseract
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
-    print("⚠️ Tesseract not installed. Image OCR disabled.")
-
-# ========================= EMBEDDING MODEL (all-MiniLM) =========================
+# ========================= EMBEDDING MODEL =========================
 model_name = "sentence-transformers/all-MiniLM-L6-v2"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModel.from_pretrained(model_name)
@@ -51,7 +43,7 @@ class CustomEmbedder:
 
 embedder = CustomEmbedder()
 
-# ========================= IN-MEMORY VECTOR STORE =========================
+# ========================= VECTOR STORE =========================
 class SimpleVectorStore:
     def __init__(self):
         self.documents = []
@@ -73,7 +65,7 @@ class SimpleVectorStore:
 
 store = SimpleVectorStore()
 
-# ========================= TEXT EXTRACTION (safe OCR) =========================
+# ========================= TEXT EXTRACTION =========================
 def extract_text_from_file(file_path):
     fname = file_path.lower()
     text = ""
@@ -81,8 +73,7 @@ def extract_text_from_file(file_path):
         reader = PdfReader(file_path)
         for page in reader.pages:
             t = page.extract_text()
-            if t:
-                text += t + "\n"
+            if t: text += t + "\n"
     elif fname.endswith('.docx'):
         doc = Document(file_path)
         for para in doc.paragraphs:
@@ -96,11 +87,12 @@ def extract_text_from_file(file_path):
             for row in reader:
                 text += ", ".join(row) + "\n"
     elif fname.endswith(('.png', '.jpg', '.jpeg')):
-        if OCR_AVAILABLE:
+        try:
+            import pytesseract
             img = Image.open(file_path)
             text = pytesseract.image_to_string(img)
-        else:
-            text = "[OCR not available on this server. Image text extraction skipped.]"
+        except:
+            text = "[OCR not available]"
     else:
         try:
             with open(file_path, 'rb') as f:
@@ -120,11 +112,9 @@ def split_text(text, chunk_size=500, overlap=50):
 
 def ingest_document(file_path):
     text = extract_text_from_file(file_path)
-    if not text:
-        return 0
+    if not text: return 0
     chunks = split_text(text)
-    if not chunks:
-        return 0
+    if not chunks: return 0
     emb = embedder.encode(chunks).tolist()
     store.add(emb, chunks, [f"doc_{i}" for i in range(len(chunks))])
     return len(chunks)
@@ -133,51 +123,7 @@ def retrieve(query, top_k=3):
     q_emb = embedder.encode([query]).tolist()
     return store.query(q_emb[0], n_results=top_k)
 
-# ========================= LLM HANDLERS =========================
-OPENROUTER_KEY = "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"
-
-def gemini_answer(client, context, question):
-    prompt = f"""You are an AI assistant. Answer STRICTLY from the context.
-If answer not in context, say 'Not found in documents'.
-
-Context:
-{context}
-
-Question: {question}
-Answer with source citations."""
-    models = [
-        "google/gemma-4-31b-it:free",
-        "google/gemini-2.0-flash-exp:free",
-        "google/gemma-2-2b-it:free",
-        "google/gemini-1.5-flash:free"
-    ]
-    for m in models:
-        try:
-            resp = client.chat.completions.create(
-                model=m, messages=[{"role":"user","content":prompt}], temperature=0.1
-            )
-            return resp.choices[0].message.content
-        except Exception as e:
-            if "429" in str(e) or "rate" in str(e).lower():
-                time.sleep(2)
-            continue
-    return "All Gemini models busy. Try OpenRouter or local."
-
-def openrouter_answer(client, context, question):
-    prompt = f"""You are an AI assistant. Answer STRICTLY from the context.
-If answer not in context, say 'Not found in documents'.
-
-Context:
-{context}
-
-Question: {question}"""
-    resp = client.chat.completions.create(
-        model="openrouter/owl-alpha",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.1
-    )
-    return resp.choices[0].message.content
-
+# ========================= LOCAL GPT2 =========================
 def setup_local_model():
     m_name = "gpt2"
     tok = AutoTokenizer.from_pretrained(m_name)
@@ -189,18 +135,18 @@ def setup_local_model():
 
 gpt_model, gpt_tokenizer = setup_local_model()
 
-def local_answer(model, tokenizer, context, question):
+def local_answer(context, question):
     prompt = f"Context: {context}\nQuestion: {question}\nAnswer:"
-    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+    inputs = gpt_tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
     if torch.cuda.is_available():
         inputs = {k: v.to("cuda") for k, v in inputs.items()}
-    outputs = model.generate(
+    outputs = gpt_model.generate(
         **inputs,
         max_new_tokens=100,
         do_sample=False,
-        pad_token_id=tokenizer.eos_token_id
+        pad_token_id=gpt_tokenizer.eos_token_id
     )
-    full = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    full = gpt_tokenizer.decode(outputs[0], skip_special_tokens=True)
     return full.split("Answer:")[-1].strip()
 
 # ========================= FLASK APP =========================
@@ -216,44 +162,37 @@ def home():
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
-        return jsonify({"error": "No file part"}), 400
+        return jsonify({"error": "No file"}), 400
     file = request.files['file']
     if file.filename == '':
-        return jsonify({"error": "No selected file"}), 400
+        return jsonify({"error": "No file selected"}), 400
     filename = secure_filename(file.filename)
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     file.save(filepath)
     num_chunks = ingest_document(filepath)
-    if num_chunks > 0:
+    if num_chunks:
         return jsonify({"message": f"✅ {filename} uploaded. {num_chunks} chunks indexed."})
     else:
-        return jsonify({"message": f"❌ No extractable text in {filename}."})
+        return jsonify({"message": f"❌ No text in {filename}."})
 
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
     query = data.get('query', '').strip()
-    choice = data.get('model_choice', '2')  # '1':Gemini, '2':OpenRouter, '3':Local
     if not query:
-        return jsonify({"answer": "Please ask a question."})
+        return jsonify({"answer": "Please ask a question.", "sources": []})
     
     chunks = retrieve(query, top_k=3)
     if not chunks:
-        return jsonify({"answer": "No documents uploaded yet. Please upload a PDF/TXT file first."})
+        return jsonify({"answer": "No document uploaded yet. Upload a file first.", "sources": []})
     
     context = "\n\n".join(chunks)
+    answer = local_answer(context, query)
     
-    # Initialize clients only when needed
-    if choice == '1':
-        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
-        ans = gemini_answer(client, context, query)
-    elif choice == '2':
-        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
-        ans = openrouter_answer(client, context, query)
-    else:
-        ans = local_answer(gpt_model, gpt_tokenizer, context, query)
-    
-    return jsonify({"answer": ans})
+    # Send sources for frontend magnifying glass
+    # Truncate each chunk for cleaner display
+    sources_preview = [chunk[:350] + "..." if len(chunk) > 350 else chunk for chunk in chunks]
+    return jsonify({"answer": answer, "sources": sources_preview})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=7860)
