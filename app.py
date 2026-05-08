@@ -8,22 +8,19 @@ from docx import Document
 from PIL import Image
 import pytesseract
 import warnings
-
-# === WEB SERVER IMPORTS ===
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
+from werkzeug.utils import secure_filename
 
 warnings.filterwarnings('ignore')
-print("✅ Imports complete.")
 
 # ============================================================
-# Aapka Cell 3: Embedding model
+# CELL 3: Embedding model (all-MiniLM-L6-v2 via transformers)
 # ============================================================
 model_name = "sentence-transformers/all-MiniLM-L6-v2"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModel.from_pretrained(model_name)
-# Hugging Face Free CPU Space ke liye CPU set kiya hai
-device = torch.device("cpu") 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
 
 def mean_pooling(model_output, attention_mask):
@@ -32,7 +29,7 @@ def mean_pooling(model_output, attention_mask):
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
 def embed_sentences(sentences, batch_size=32):
-    all_emb = []
+    all_emb =[]
     for i in range(0, len(sentences), batch_size):
         batch = sentences[i:i+batch_size]
         encoded = tokenizer(batch, padding=True, truncation=True, max_length=128, return_tensors='pt').to(device)
@@ -49,15 +46,14 @@ class CustomEmbedder:
         return embed_sentences(texts)
 
 embedder = CustomEmbedder()
-print("✅ Embedding model ready.")
 
 # ============================================================
-# Aapka Cell 4: In‑memory vector store
+# CELL 4: In-memory vector store
 # ============================================================
 class SimpleVectorStore:
     def __init__(self):
         self.documents = []
-        self.embeddings = []
+        self.embeddings =[]
 
     def add(self, embeddings, documents, ids):
         for emb, doc in zip(embeddings, documents):
@@ -67,7 +63,7 @@ class SimpleVectorStore:
     def query(self, query_embedding, n_results=3):
         query_vec = np.array(query_embedding).flatten()
         if not self.embeddings:
-            return []
+            return[]
         matrix = np.stack(self.embeddings)
         dot = np.dot(matrix, query_vec)
         norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(query_vec)
@@ -76,10 +72,9 @@ class SimpleVectorStore:
         return [self.documents[i] for i in top]
 
 store = SimpleVectorStore()
-print("✅ Vector store ready.")
 
 # ============================================================
-# Aapka Cell 5: Multi‑format text extractor
+# CELL 5: Multi-format text extractor + ingest
 # ============================================================
 def extract_text_from_file(file_path):
     fname = file_path.lower()
@@ -108,7 +103,7 @@ def extract_text_from_file(file_path):
     return text
 
 def split_text(text, chunk_size=500, overlap=50):
-    chunks = []
+    chunks =[]
     for i in range(0, len(text), chunk_size - overlap):
         chunk = text[i:i+chunk_size]
         if len(chunk) > 100: chunks.append(chunk)
@@ -122,85 +117,121 @@ def ingest_document(file_path):
     store.add(emb, chunks, [f"doc_{i}" for i in range(len(chunks))])
     return len(chunks)
 
-print("✅ Text extraction & ingest ready.")
-
 # ============================================================
-# Aapka Cell 6: Retrieve top‑k chunks
+# CELL 6: Retrieve
 # ============================================================
 def retrieve(query, top_k=3):
     q_emb = embedder.encode([query]).tolist()
     return store.query(q_emb[0], n_results=top_k)
 
-print("✅ Retrieval function ready.")
-
 # ============================================================
-# Aapka Cell 7: Models Setup
+# CELL 7: LLM Setup
 # ============================================================
 OPENROUTER_KEY = "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"
 
-def setup_openrouter():
-    return OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
+def setup_clients():
+    gemini = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
+    ow = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=OPENROUTER_KEY)
+    return gemini, ow
+
+gemini_client, ow_client = setup_clients()
+
+def gemini_answer(client, context, question):
+    prompt = f"""You are an AI assistant. Answer STRICTLY from the context.
+If answer not in context, say 'Not found in documents'.
+Context:\n{context}\n\nQuestion: {question}\nAnswer with source citations."""
+    models =["google/gemma-4-31b-it:free", "google/gemini-2.0-flash-exp:free", "google/gemma-2-2b-it:free", "google/gemini-1.5-flash:free"]
+    for m in models:
+        try:
+            resp = client.chat.completions.create(model=m, messages=[{"role":"user","content":prompt}], temperature=0.1)
+            return resp.choices[0].message.content
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                time.sleep(2)
+            else:
+                continue
+    return "All models busy. Try later or use Local Model."
 
 def openrouter_answer(client, context, question):
     prompt = f"""You are an AI assistant. Answer STRICTLY from the context.
 If answer not in context, say 'Not found in documents'.
-
-Context:
-{context}
-
-Question: {question}"""
-    resp = client.chat.completions.create(
-        model="openrouter/owl-alpha",
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.1)
+Context:\n{context}\n\nQuestion: {question}"""
+    resp = client.chat.completions.create(model="openrouter/owl-alpha", messages=[{"role":"user","content":prompt}], temperature=0.1)
     return resp.choices[0].message.content
 
-# Default model web ke liye OpenRouter set kar rahe hain
-ow_client = setup_openrouter()
+def setup_local_model():
+    m_name = "gpt2"
+    tok = AutoTokenizer.from_pretrained(m_name)
+    mod = AutoModelForCausalLM.from_pretrained(m_name)
+    tok.pad_token = tok.eos_token
+    if torch.cuda.is_available(): mod = mod.to("cuda")
+    return mod, tok
 
+gpt_model, gpt_tokenizer = setup_local_model()
+
+def local_answer(model, tokenizer, context, question):
+    prompt = f"Context: {context}\nQuestion: {question}\nAnswer:"
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
+    if torch.cuda.is_available(): inputs = {k: v.to("cuda") for k, v in inputs.items()}
+    outputs = model.generate(**inputs, max_new_tokens=100, do_sample=False, pad_token_id=tokenizer.eos_token_id)
+    full = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    return full.split("Answer:")[-1].strip()
 
 # ============================================================
-# AUTOMATIC FILE INGESTION (Colab ke file upload ki jagah)
-# ============================================================
-def index_local_files():
-    # Yeh function Hugging Face folder mein majood sab files ko khud read kar lega
-    files = [f for f in os.listdir('.') if f.endswith(('.pdf', '.docx', '.txt', '.csv', '.png', '.jpg'))]
-    total_chunks = 0
-    for file in files:
-        print(f"Indexing: {file}")
-        total_chunks += ingest_document(file)
-    print(f"✅ Auto-indexing complete. {total_chunks} chunks indexed.")
-
-index_local_files()
-
-
-# ============================================================
-# FLASK WEB SERVER (Colab ke while True loop ki jagah)
+# FLASK WEB SERVER API
 # ============================================================
 app = Flask(__name__)
 CORS(app)
+UPLOAD_FOLDER = 'uploaded_doc'
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route('/')
 def home():
     return send_file('index.html')
 
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
+    
+    # Ingest file exactly like Cell 8
+    num_chunks = ingest_document(filepath)
+    if num_chunks > 0:
+        return jsonify({"message": f"✅ {filename} uploaded successfully. {num_chunks} chunks indexed."})
+    else:
+        return jsonify({"message": f"❌ No text extracted from {filename}."})
+
 @app.route('/chat', methods=['POST'])
 def chat():
-    data = request.json
-    q = data.get('query')
-    
-    if not q:
-        return jsonify({"answer": "Please ask a question."})
+    try:
+        data = request.json
+        q = data.get('query')
+        choice = data.get('model_choice', '2') # 1: Gemini, 2: OpenRouter, 3: Local GPT-2
+        
+        if not q: return jsonify({"answer": "Please ask a question."})
 
-    # Aapka apna Retrieval aur Answer logic
-    chunks = retrieve(q, top_k=3)
-    ctx = "\n\n".join(chunks)
-    
-    # Generate Answer using your openrouter function
-    ans = openrouter_answer(ow_client, ctx, q)
-    
-    return jsonify({"answer": ans})
+        chunks = retrieve(q, top_k=3)
+        ctx = "\n\n".join(chunks)
+
+        if choice == '1':
+            ans = gemini_answer(gemini_client, ctx, q)
+        elif choice == '2':
+            ans = openrouter_answer(ow_client, ctx, q)
+        elif choice == '3':
+            ans = local_answer(gpt_model, gpt_tokenizer, ctx, q)
+        else:
+            ans = openrouter_answer(ow_client, ctx, q)
+            
+        return jsonify({"answer": ans})
+    except Exception as e:
+        return jsonify({"answer": f"❌ Error processing request: {str(e)}"})
 
 if __name__ == '__main__':
-    # Hugging Face space port 7860 use karta hai
     app.run(host='0.0.0.0', port=7860)
